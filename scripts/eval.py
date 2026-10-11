@@ -43,15 +43,23 @@ def field_correct(field: str, pred, gold) -> bool:
     return norm(pred) == norm(gold)
 
 
+def _num_close(a, b) -> bool:
+    return abs(float(a) - float(b)) <= 0.011
+
+
 def line_item_prf(pred: list[dict], gold: list[dict]) -> tuple[float, float, float]:
-    """Match by amount (±0.01) and a loose description overlap; one-to-one."""
+    """Match by amount, quantity and unit price (±0.01 each) and a loose description overlap; one-to-one.
+
+    Quantity and unit price are part of the match: a line with the right amount but a misread
+    quantity is a real error for a bookkeeper and must count as one."""
     used = set()
     tp = 0
     for p in pred:
         for j, g in enumerate(gold):
             if j in used:
                 continue
-            if abs(float(p["amount"]) - float(g["amount"])) <= 0.011 and _desc_match(p["description"], g["description"]):
+            if (_num_close(p["amount"], g["amount"]) and _num_close(p["quantity"], g["quantity"])
+                    and _num_close(p["unit_price"], g["unit_price"]) and _desc_match(p["description"], g["description"])):
                 used.add(j)
                 tp += 1
                 break

@@ -21,11 +21,24 @@ def test_field_correct_rules():
 
 
 def test_line_item_prf():
-    gold = [{"description": "HEPA filter AF-200", "amount": 50.0}, {"description": "USB-C dock", "amount": 70.0}]
-    pred = [{"description": "HEPA filter", "amount": 50.0}, {"description": "Dock USB-C", "amount": 70.0}, {"description": "extra", "amount": 1.0}]
+    gold = [{"description": "HEPA filter AF-200", "quantity": 2, "unit_price": 25.0, "amount": 50.0},
+            {"description": "USB-C dock", "quantity": 1, "unit_price": 70.0, "amount": 70.0}]
+    pred = [{"description": "HEPA filter", "quantity": 2, "unit_price": 25.0, "amount": 50.0},
+            {"description": "Dock USB-C", "quantity": 1, "unit_price": 70.0, "amount": 70.0},
+            {"description": "extra", "quantity": 1, "unit_price": 1.0, "amount": 1.0}]
     p, r, f1 = evalmod.line_item_prf(pred, gold)
     assert r == 1.0 and p == 2 / 3 and 0.79 < f1 < 0.81
     assert evalmod.line_item_prf([], []) == (1.0, 1.0, 1.0)
+
+
+def test_line_item_prf_requires_quantity_and_unit_price():
+    gold = [{"description": "Training workshop, half day", "quantity": 5, "unit_price": 710.58, "amount": 3552.9}]
+    pred = [{"description": "Training workshop, half day", "quantity": 1, "unit_price": 710.58, "amount": 3552.9}]
+    assert evalmod.line_item_prf(pred, gold) == (0.0, 0.0, 0.0)  # right amount, misread quantity: an error
+    pred[0]["quantity"] = 5.004
+    assert evalmod.line_item_prf(pred, gold) == (1.0, 1.0, 1.0)
+    pred[0]["unit_price"] = 710.0
+    assert evalmod.line_item_prf(pred, gold) == (0.0, 0.0, 0.0)
 
 
 def test_summarize_and_markdown():

@@ -32,6 +32,9 @@ class Settings:
     llm_base_url: str = field(default_factory=lambda: _env("LLM_BASE_URL", "https://api.groq.com/openai/v1"))
     llm_api_key: str = field(default_factory=lambda: _env("LLM_API_KEY", ""))
     llm_model: str = field(default_factory=lambda: _env("LLM_MODEL", ""))  # a vision-capable model
+    # Ask the server to enforce the JSON schema (response_format=json_schema). Off by default: Groq's
+    # constrained decoder turned Ü/ı/Ş into control characters; JSON mode + Pydantic keeps them.
+    use_json_schema: bool = field(default_factory=lambda: _env("USE_JSON_SCHEMA", "0").strip().lower() in ("1", "true", "yes"))
     anthropic_api_key: str = field(default_factory=lambda: _env("ANTHROPIC_API_KEY", ""))
     anthropic_model: str = field(default_factory=lambda: _env("ANTHROPIC_MODEL", "claude-sonnet-5-5"))
     # --- document preparation ----------------------------------------------

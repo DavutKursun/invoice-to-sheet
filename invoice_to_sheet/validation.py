@@ -16,6 +16,12 @@ def _close(a: float, b: float, tol_abs: float, tol_rel: float) -> bool:
     return abs(a - b) <= max(tol_abs, tol_rel * max(abs(a), abs(b)))
 
 
+def _has_control_chars(s: str) -> bool:
+    """True when a text field carries ASCII control characters (< 0x20 or DEL). Seen when a
+    schema-constrained decoder mangles accented letters such as Ü into \\u0000 bytes."""
+    return any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in s)
+
+
 def _parse_date(s: str) -> date | None:
     if not s:
         return None
@@ -42,6 +48,11 @@ def validate(
         reasons.append("document does not look like an invoice or receipt")
     if not x.vendor_name.strip():
         reasons.append("vendor name is missing")
+    text_fields = [("vendor name", x.vendor_name), ("invoice number", x.invoice_number)]
+    text_fields += [(f"line {i} description", li.description) for i, li in enumerate(x.line_items, 1)]
+    for label, value in text_fields:
+        if _has_control_chars(value):
+            reasons.append(f"{label} contains unreadable characters")
     if x.total <= 0:
         reasons.append(f"total is {x.total:.2f}; expected a positive amount")
 

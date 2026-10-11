@@ -59,6 +59,19 @@ def test_other_document_type_and_zero_total(good_extraction):
     assert any("does not look like" in r for r in reasons) and any("positive amount" in r for r in reasons)
 
 
+def test_control_characters_send_to_review(good_extraction):
+    good_extraction.vendor_name = "Kestrel Software O\x00\x00"  # what a constrained decoder made of "OÜ"
+    assert validate(good_extraction, today=TODAY) == ["vendor name contains unreadable characters"]
+    good_extraction.vendor_name = "Kestrel Software OÜ"
+    good_extraction.invoice_number = "F-1\x7f"
+    good_extraction.line_items[1].description = "Delta Yap\x10"
+    reasons = validate(good_extraction, today=TODAY)
+    assert reasons == ["invoice number contains unreadable characters", "line 2 description contains unreadable characters"]
+    good_extraction.invoice_number = "F-1"
+    good_extraction.line_items[1].description = "Delta Yapı"
+    assert validate(good_extraction, today=TODAY) == []
+
+
 def test_discount_is_respected(good_extraction):
     good_extraction.discount = 10.0
     good_extraction.total = 109.0
