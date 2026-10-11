@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from invoice_to_sheet.schema import LineItem
 from invoice_to_sheet.validation import validate
 
 TODAY = date(2026, 10, 11)
@@ -57,6 +58,17 @@ def test_other_document_type_and_zero_total(good_extraction):
     good_extraction.subtotal = 0
     reasons = validate(good_extraction, today=TODAY)
     assert any("does not look like" in r for r in reasons) and any("positive amount" in r for r in reasons)
+
+
+def test_priced_line_needs_quantity_and_unit_price(good_extraction):
+    good_extraction.line_items[0].quantity = 0.0  # amount 50 stays, so the sums still add up
+    assert validate(good_extraction, today=TODAY) == ["line 1: quantity or unit price missing"]
+    good_extraction.line_items[0].quantity = 2153.71  # inv007: quantity and unit price fused
+    good_extraction.line_items[0].unit_price = 0.0
+    assert validate(good_extraction, today=TODAY) == ["line 1: quantity or unit price missing"]
+    good_extraction.line_items[0].quantity, good_extraction.line_items[0].unit_price = 2.0, 25.0
+    good_extraction.line_items.append(LineItem(description="Free sample", quantity=0, unit_price=0, amount=0))
+    assert validate(good_extraction, today=TODAY) == []  # a zero-amount line may have no factors
 
 
 def test_control_characters_send_to_review(good_extraction):

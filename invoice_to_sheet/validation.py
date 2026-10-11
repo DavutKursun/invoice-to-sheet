@@ -63,6 +63,10 @@ def validate(
         for i, li in enumerate(x.line_items, 1):
             if li.quantity and li.unit_price and not _close(li.quantity * li.unit_price, li.amount, tol_abs, tol_rel):
                 reasons.append(f"line {i}: {li.quantity:g} × {li.unit_price:.2f} ≠ {li.amount:.2f}")
+            elif li.amount > 0 and not (li.quantity and li.unit_price):
+                # a priced line must have both factors; a zero here is a misread (inv007: "2" and "153,71 €"
+                # fused into quantity 2153.71, unit price 0) and would otherwise skip the arithmetic check
+                reasons.append(f"line {i}: quantity or unit price missing")
     if x.discount < 0:
         reasons.append(f"discount {x.discount:.2f} is negative")
     if x.subtotal and not _close(x.subtotal - x.discount + x.tax_amount, x.total, tol_abs, tol_rel):
