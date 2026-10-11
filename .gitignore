@@ -1,0 +1,11 @@
+.env
+.budget.json
+output/
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.vscode/
+.idea/
+.DS_Store
+scratchpad/

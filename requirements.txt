@@ -1,0 +1,6 @@
+-r requirements-core.txt
+openai>=1.50          # OpenAI-compatible providers (Groq, OpenRouter, ...)
+anthropic>=0.50       # optional: Claude provider
+gradio>=5.0
+gspread>=6.0          # optional: Google Sheets writer
+google-auth>=2.30
