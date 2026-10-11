@@ -1,0 +1,2 @@
+DejaVu fonts — Bitstream Vera Fonts Copyright (c) 2003 Bitstream, Inc.; DejaVu changes are in the public domain.
+Redistributable under the Bitstream Vera licence (https://dejavu-fonts.github.io/License.html). Used only to render the synthetic sample invoices.

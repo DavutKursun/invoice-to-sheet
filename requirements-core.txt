@@ -1,0 +1,6 @@
+# Runtime core (no SDKs): enough for tests, the synthetic generator and the dry-run eval
+pydantic>=2.6
+pillow>=10.0
+pypdfium2>=4.30
+python-dateutil>=2.9
+reportlab>=4.0
