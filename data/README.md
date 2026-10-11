@@ -13,3 +13,15 @@ discounts. `labels.jsonl` holds the exact ground truth per document.
 
 Split: 60 dev (tuning), 20 test (run once at the end). Everything is fictional; no real company or
 person is referenced. Fonts: DejaVu (see `assets/fonts/LICENSE.txt`).
+
+## Regenerated on 2026-10-11
+
+The first dev run showed that in the narrow receipt layout long descriptions ("Training workshop,
+half day", "A4 copy paper, 80 g, 500 sheets") ran into the Qty column and overprinted the digit, so the
+quantity was unreadable on the page. In the same layout an EUR/TRY unit price ("153,71 €") was wider
+than its column and touched the quantity, so "2" and "153,71 €" read as 2153.71. The generator now
+wraps a description onto a second line and leaves 19 mm between the Qty, Unit and Amount columns,
+and PDFs are written without timestamps so regenerating gives identical bytes. The dataset
+was regenerated with the same seed (7): `labels.jsonl` is unchanged, including the test split; the
+receipt-layout pages (and their photo copies) look different, every other page is the same. The
+first dev run (`eval/results/dev-qwen_qwen3.8-27b.*`, 20 documents) was scored against these labels.

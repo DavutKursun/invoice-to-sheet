@@ -21,6 +21,7 @@ from pathlib import Path
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
+from reportlab.lib.utils import simpleSplit
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
@@ -151,7 +152,9 @@ def draw(c: canvas.Canvas, inv: dict, injection: str | None) -> None:
     if t == 1:
         cols = [("Qty", 1), ("Description", 0), ("Unit", 2), ("Amount", 3)]
     if t == 5:
-        xs = [margin, W - margin - 30 * mm, W - margin - 18 * mm, W - margin]
+        # Qty ends 38 mm before the right margin so that an EUR/TRY unit price ("1.234,56 €" ≈ 15 mm at
+        # 7 pt mono) fits between Qty and Unit with a gap; before, "2" and "153,71 €" touched.
+        xs = [margin, W - margin - 38 * mm, W - margin - 19 * mm, W - margin]
     else:
         xs = [margin, W - margin - 70 * mm, W - margin - 40 * mm, W - margin]
     c.setFont(bold, 9 if t != 5 else 7)
@@ -159,14 +162,28 @@ def draw(c: canvas.Canvas, inv: dict, injection: str | None) -> None:
         (c.drawRightString if name != "Description" and name != "Qty" or x != margin else c.drawString)(x, y, name)
     y -= 2 * mm
     c.setStrokeColor(accent); c.line(margin, y, W - margin, y); y -= 5 * mm
-    c.setFont(font, 9 if t != 5 else 7)
+    size = 9 if t != 5 else 7
+    c.setFont(font, size)
     for li in inv["line_items"]:
         vals = {0: li["description"], 1: f"{li['quantity']:g}", 2: money(li["unit_price"], cur), 3: money(li["amount"], cur)}
-        for (name, key), x in zip(cols, xs):
-            if x == margin:
-                c.drawString(x, y, vals[key][:38] if t == 5 else vals[key])
-            else:
+        wrapped: list[str] = []
+        for j, ((name, key), x) in enumerate(zip(cols, xs)):
+            if x != margin:
                 c.drawRightString(x, y, vals[key])
+                continue
+            text = vals[key]
+            if key == 0 and j + 1 < len(cols):
+                # A left-aligned description must never run into the next (right-aligned) column:
+                # wrap it to the width left of that column's own text. Only the narrow receipt
+                # layout is tight enough for this to trigger; the label keeps the full text.
+                next_text = vals[cols[j + 1][1]]
+                avail = xs[j + 1] - pdfmetrics.stringWidth(next_text, font, size) - 2 * mm - x
+                lines = simpleSplit(text, font, size, avail) or [text]
+                text, wrapped = lines[0], lines[1:]
+            c.drawString(x, y, text)
+        for extra in wrapped:
+            y -= 3.2 * mm if t == 5 else 4 * mm
+            c.drawString(margin, y, extra)
         y -= 5 * mm
     y -= 3 * mm
     c.line(margin, y, W - margin, y); y -= 6 * mm
@@ -229,7 +246,7 @@ def main(argv=None) -> int:
         inv = gen_invoice(rng, i)
         injection = rng.choice(INJECTIONS) if i in adversarial_ids else None
         pdf = a.out / "pdf" / f"{inv['id']}.pdf"
-        c = canvas.Canvas(str(pdf), pagesize=A4)
+        c = canvas.Canvas(str(pdf), pagesize=A4, invariant=1)  # no timestamp/ID: regenerating gives identical bytes
         draw(c, inv, injection)
         c.save()
         kind = "adversarial" if injection else ("photo" if rng.random() < a.photo_share else "clean")
