@@ -15,22 +15,26 @@ class LineItem(BaseModel):
 
 
 class InvoiceExtraction(BaseModel):
+    """All 16 fields are required ("" / 0 / [] when absent). No Python defaults: a default makes the field
+    optional in the JSON schema, and 14 optional properties made the Claude structured-outputs compiler
+    reject the schema with "Schema is too complex" (2026-10-19)."""
+
     document_type: Literal["invoice", "receipt", "other"]
     vendor_name: str
-    vendor_tax_id: str = ""
-    invoice_number: str = ""
-    invoice_date: str = ""  # ISO date YYYY-MM-DD or ""
-    due_date: str = ""
-    currency: str = ""  # ISO 4217, e.g. USD, EUR, TRY
-    subtotal: float = 0.0
-    discount: float = 0.0  # positive number; 0 if none
-    tax_amount: float = 0.0
-    total: float = 0.0
-    line_items: list[LineItem] = Field(default_factory=list)
-    payment_terms: str = ""
-    confidence: float = Field(ge=0.0, le=1.0, default=0.0)
-    low_confidence_fields: list[str] = Field(default_factory=list)
-    notes: str = ""
+    vendor_tax_id: str  # "" if absent
+    invoice_number: str  # "" if absent
+    invoice_date: str  # ISO date YYYY-MM-DD or ""
+    due_date: str  # ISO date or ""
+    currency: str  # ISO 4217, e.g. USD, EUR, TRY
+    subtotal: float
+    discount: float  # positive number; 0 if none
+    tax_amount: float
+    total: float
+    line_items: list[LineItem]
+    payment_terms: str  # "" if absent
+    confidence: float = Field(ge=0.0, le=1.0)
+    low_confidence_fields: list[str]
+    notes: str
 
 
 MONEY_FIELDS = ("subtotal", "discount", "tax_amount", "total")

@@ -91,6 +91,8 @@ def validate(
     if x.confidence < min_confidence:
         reasons.append(f"model confidence {x.confidence:.2f} is below {min_confidence:.2f}")
     doubtful_money = [f for f in x.low_confidence_fields if f in MONEY_FIELDS]
+    # an absent discount is the normal case: the model reports 0 and may list it; that is not doubt about money
+    doubtful_money = [f for f in doubtful_money if not (f == "discount" and x.discount == 0)]
     if doubtful_money:
         reasons.append("model is unsure about: " + ", ".join(doubtful_money))
 

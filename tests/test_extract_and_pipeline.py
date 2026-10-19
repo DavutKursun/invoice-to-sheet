@@ -27,7 +27,7 @@ class FakeProvider:
 
 def good_json(**over):
     d = {"document_type": "invoice", "vendor_name": "Aria Air GmbH", "vendor_tax_id": "", "invoice_number": "INV-7",
-         "invoice_date": "2026-03-02", "due_date": "2026-04-01", "currency": "EUR", "subtotal": 100.0, "tax_amount": 19.0,
+         "invoice_date": "2026-03-02", "due_date": "2026-04-01", "currency": "EUR", "subtotal": 100.0, "discount": 0.0, "tax_amount": 19.0,
          "total": 119.0, "line_items": [{"description": "Filter", "quantity": 4, "unit_price": 25.0, "amount": 100.0}],
          "payment_terms": "Net 30", "confidence": 0.9, "low_confidence_fields": [], "notes": ""}
     d.update(over)

@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from invoice_to_sheet.config import settings  # noqa: E402
+from invoice_to_sheet.providers import ProviderError  # noqa: E402
 from invoice_to_sheet.schema import InvoiceExtraction  # noqa: E402
 from invoice_to_sheet.validation import validate  # noqa: E402
 
@@ -83,6 +84,14 @@ def score_doc(pred: InvoiceExtraction, gold: dict, reasons: list[str]) -> dict:
             "any_error": any_error, "decision": "auto_approved" if not reasons else "needs_review", "reasons": reasons}
 
 
+def error_row(gold: dict, error: str, seconds: float) -> dict:
+    """A document that produced no extraction: wrong everywhere, decision "error" (never auto-approved)."""
+    return {"id": gold["id"], "kind": gold["kind"], "file": gold["file"],
+            "fields": {f: False for f in FIELDS_EXACT + FIELDS_MONEY}, "money_ok": False,
+            "li_precision": 0.0, "li_recall": 0.0, "li_f1": 0.0, "any_error": True, "decision": "error", "reasons": [error],
+            "cost_usd": 0.0, "seconds": seconds, "repaired": False, "pred": None}
+
+
 def summarize(rows: list[dict]) -> dict:
     n = len(rows)
     if not n:
@@ -91,6 +100,8 @@ def summarize(rows: list[dict]) -> dict:
     for f in FIELDS_EXACT + FIELDS_MONEY:
         out[f"acc_{f}"] = sum(r["fields"][f] for r in rows) / n
     out["money_all_correct"] = sum(r["money_ok"] for r in rows) / n
+    out["exact_match"] = sum(not r["any_error"] for r in rows) / n  # every scored field and every line item right
+    out["n_errors"] = sum(r["decision"] == "error" for r in rows)
     out["li_f1_mean"] = statistics.mean(r["li_f1"] for r in rows)
     approved = [r for r in rows if r["decision"] == "auto_approved"]
     review = [r for r in rows if r["decision"] == "needs_review"]
@@ -123,6 +134,8 @@ def markdown(summary: dict, label: str) -> str:
         lines.append(f"| {f} accuracy | {pct(summary[f'acc_{f}'])} |")
     lines += [
         f"| All money fields correct | {pct(summary['money_all_correct'])} |",
+        f"| Document exact match (all fields and line items) | {pct(summary['exact_match'])} |",
+        f"| Documents that failed (no extraction) | {summary['n_errors']} |",
         f"| Line-item F1 (mean) | {summary['li_f1_mean']:.2f} |",
         f"| Auto-approved share | {pct(summary['approved_share'])} |",
         f"| Errors among auto-approved | {pct(summary['errors_among_approved'])} |",
@@ -174,18 +187,30 @@ def main(argv=None) -> int:
     for i, gold in enumerate(labels, 1):
         path = a.data / gold["file"]
         t0 = time.perf_counter()
-        if a.dry_run:
-            pred = InvoiceExtraction(**{k: gold[k] for k in InvoiceExtraction.model_fields if k in gold}, confidence=0.95)
-            cost, repaired = 0.0, False
-        else:
-            from invoice_to_sheet.extract import extract
-            from invoice_to_sheet.prepare import prepare
-            from invoice_to_sheet.costs import cost_usd
+        try:
+            if a.dry_run:
+                pred = InvoiceExtraction(**{k: gold[k] for k in InvoiceExtraction.model_fields if k in gold},
+                                         confidence=0.95, low_confidence_fields=[], notes="")
+                cost, repaired = 0.0, False
+            else:
+                from invoice_to_sheet.extract import extract
+                from invoice_to_sheet.prepare import prepare
+                from invoice_to_sheet.costs import cost_usd
 
-            doc = prepare(path, settings.max_pages, settings.render_dpi, settings.max_image_side, settings.max_file_mb)
-            ex = extract(doc, provider, model)
-            pred, repaired = ex.data, ex.repaired
-            cost = cost_usd(model, ex.result.input_tokens, ex.result.output_tokens)
+                doc = prepare(path, settings.max_pages, settings.render_dpi, settings.max_image_side, settings.max_file_mb)
+                ex = extract(doc, provider, model)
+                pred, repaired = ex.data, ex.repaired
+                cost = cost_usd(model, ex.result.input_tokens, ex.result.output_tokens)
+        except (ProviderError, ValueError, RuntimeError) as e:
+            # one failing document must not abort the run: record it as a failed row and carry on
+            row = error_row(gold, f"{type(e).__name__}: {e}", time.perf_counter() - t0)
+            rows.append(row)
+            with jsonl.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+            print(f"[{i}/{len(labels)}] {gold['id']} {gold['kind']:11s} ERROR {row['reasons'][0][:120]}", flush=True)
+            if a.delay and not a.dry_run:
+                time.sleep(a.delay)
+            continue
         seconds = time.perf_counter() - t0
         reasons = validate(pred, tol_abs=settings.amount_tolerance_abs, tol_rel=settings.amount_tolerance_rel, min_confidence=settings.min_confidence)
         row = {"id": gold["id"], "kind": gold["kind"], "file": gold["file"], **score_doc(pred, gold, reasons),

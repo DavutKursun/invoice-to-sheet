@@ -46,6 +46,16 @@ def test_currency_confidence_and_doubtful_money(good_extraction):
     assert any("unsure about: total" in r for r in reasons)
 
 
+def test_absent_discount_is_not_doubtful(good_extraction):
+    good_extraction.low_confidence_fields = ["discount"]
+    assert validate(good_extraction, today=TODAY) == []  # discount 0 and nothing printed: normal
+    good_extraction.discount, good_extraction.total = 10.0, 109.0
+    assert validate(good_extraction, today=TODAY) == ["model is unsure about: discount"]  # a real discount in doubt
+    good_extraction.discount, good_extraction.total = 0.0, 119.0
+    good_extraction.low_confidence_fields = ["discount", "total"]
+    assert validate(good_extraction, today=TODAY) == ["model is unsure about: total"]  # other doubts stay
+
+
 def test_duplicate(good_extraction):
     keys = {("aria air gmbh", "inv-1001")}
     assert any("duplicate" in r for r in validate(good_extraction, today=TODAY, existing_keys=keys))

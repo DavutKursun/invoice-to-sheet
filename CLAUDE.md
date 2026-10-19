@@ -4,68 +4,68 @@ This file is the build spec. Read it fully before writing code. Work milestone b
 milestone; after each milestone stop, show how to run it, and wait for Davut's OK.
 Section 0 says where we are and what changed from the original plan.
 
-## 0. Status (updated 2026-10-11, evening)
+## 0. Status (updated 2026-10-19)
 
-**Milestones 1–3 done; M4 at step 2b of 3 (33 tests, no network). Continue with the "Tomorrow" list below.**
+**Milestones 1–4 done (38 tests, no network). Next: M5 — Gradio UI + HF Space (§9, §10).**
+
+M4 result (Claude Haiku 5.5, `claude-haiku-5-5`, list price from reported usage): dev (60 docs) and test
+(20 docs) both 100% on every scored field, document exact match 100%, line-item F1 1.00, 0 errors among
+auto-approved; dev 59/60 auto-approved (one injected invoice the model flagged at confidence 0.70), test
+20/20; 3/3 injections ignored (dev only, the test split has none); $0.0008–0.0009 per document ($0.067 for
+both runs); latency p50 4.7–4.9 s, p95 under 6 s. **The test split was run exactly once, on 2026-10-19,
+after all tuning. Do not tune against it.** Tables: `eval/results/{dev,test}-claude-haiku-5-5.md`, README
+"Results", docs/DESIGN.md "Evaluation" and "Findings".
 
 Deviations from the original spec, in the order they happened:
 
-- **No paid API by default.** The default provider is a free OpenAI-compatible vision model on Groq;
-  Claude stays optional (`LLM_PROVIDER=anthropic`, native PDF input, `messages.parse`). Groq does not
-  accept PDFs, so `prepare.py` renders pages to JPEG with pypdfium2. Davut's Groq key lists 11 models and
-  only one with vision, `qwen/qwen3.8-27b` (no Llama 4); it is set as `LLM_MODEL` in .env.
-- **JSON mode + Pydantic is the default structured output** on OpenAI-compatible providers: the JSON
-  schema is appended to the instruction (~400 tokens), the server guarantees JSON, Pydantic validates,
-  one repair retry. `USE_JSON_SCHEMA=1` opts into `response_format=json_schema` (strict). Reason: on
-  Groq the strict decoder turned Ü/ı/Ş into control characters in 7 of 20 vendor names
-  (`Kestrel Software O\u0000\u0000`, `Delta Yap\u0010`, `A.\u007f.`); the same document (inv010) in plain
-  JSON mode came back as "Kestrel Software OÜ". Verified on one document so far. Groq's
-  `json_validate_failed` is handled as a bad generation (the call is redone in JSON mode), not as
-  "schema unsupported"; error codes are logged. Prompt rule 8 ("copy accented characters exactly",
-  PROMPT_VERSION 2026-10-11.2) did not help on its own and stays.
-- **Schema gained `discount`** (see docs/DESIGN.md). **Validation gained two checks:** control characters
-  in vendor_name / invoice_number / a line description → review ("… contains unreadable characters");
-  a line with amount > 0 but quantity or unit price 0 → review ("line N: quantity or unit price
-  missing"). MIN_CONFIDENCE stays 0.85, tolerances unchanged.
-- **Dataset regenerated 2026-10-11** (seed 7; `labels.jsonl` byte-identical, test split included). The
-  narrow receipt layout let long descriptions overprint the Qty digit and let EUR/TRY unit prices touch
-  the quantity ("2" + "153,71 €" was read as quantity 2153.71). Descriptions now wrap, the Qty/Unit/Amount
-  columns are 19 mm apart, and PDFs are invariant (no timestamps), so regenerating is byte-identical.
-  Details in data/README.md.
-- **Stricter line-item scoring** in `scripts/eval.py`: a predicted line matches a gold line only when
-  amount, quantity and unit price are all within 0.01 and the description overlaps.
+- **No paid API by default.** The default provider is a free OpenAI-compatible vision model on Groq; Claude
+  is the measured, optional provider (`LLM_PROVIDER=anthropic`, native PDF input, `messages.parse`). Groq
+  does not accept PDFs, so `prepare.py` renders pages to JPEG with pypdfium2. Davut's Groq key lists only
+  one vision model, `qwen/qwen3.8-27b` (no Llama 4). .env currently points at Claude; the Groq path stays
+  the public-demo default (README).
+- **JSON mode + Pydantic is the default structured output on OpenAI-compatible providers** (schema appended
+  to the instruction, ~400 tokens; one repair retry). `USE_JSON_SCHEMA=1` opts into strict json_schema.
+  Reason: Groq's strict decoder turned Ü/ı/Ş into control characters in 7 of 20 vendor names; plain JSON
+  mode kept them. Groq's `json_validate_failed` is a bad generation (call redone in JSON mode), not
+  "unsupported"; error codes are logged.
+- **All 16 schema fields are required, no Python defaults** (§4). With defaults only 2 fields were in
+  `required` and Claude answered 400 "Schema is too complex"; `tests/test_schema.py` checks
+  `anthropic.transform_schema(InvoiceExtraction)` without network. The schema also gained `discount`.
+- **Validation gained three rules:** control characters in vendor_name / invoice_number / a line description
+  → review ("… contains unreadable characters"); a priced line with quantity or unit price 0 → review
+  ("line N: quantity or unit price missing"); a doubtful `discount` is ignored when it is 0, because prompt
+  rule 2 told the model to flag absent values and Haiku flagged `discount` on 37/60 dev docs with 0 real
+  errors. Prompt rule 4 now says an absent discount is normal (PROMPT_VERSION 2026-10-19.1). MIN_CONFIDENCE
+  0.85 and tolerances unchanged.
+- **Dataset regenerated 2026-10-11** (seed 7; `labels.jsonl` byte-identical). The narrow receipt layout let
+  descriptions overprint the Qty digit and EUR/TRY unit prices touch the quantity ("2" + "153,71 €" read as
+  2153.71). Descriptions wrap, columns are 19 mm apart, PDFs are invariant. Details in data/README.md.
+- **Eval:** line items match on amount, quantity and unit price (±0.01) plus description; a failing document
+  is recorded as a row with decision `error` and the run continues; "Document exact match" is reported.
 
 Implemented:
-- `invoice_to_sheet/config.py` (incl. `USE_JSON_SCHEMA`), `schema.py`, `prepare.py`, `providers.py`
-  (OpenAICompatProvider: JSON mode default, json_schema opt-in, logged fallbacks; AnthropicProvider),
-  `extract.py` (versioned prompt, validation, repair), `validation.py` (§5.3 + discount + control chars +
-  zero quantity), `pipeline.py`, `costs.py`, `sheets.py` (CsvWriter; GoogleSheetsWriter via gspread —
-  **not yet tested against a real sheet**)
+- `invoice_to_sheet/config.py` (incl. `USE_JSON_SCHEMA`), `schema.py` (all required + strict JSON schema),
+  `prepare.py`, `providers.py` (OpenAICompatProvider: JSON mode default, json_schema opt-in, logged
+  fallbacks; AnthropicProvider: document/image blocks + `messages.parse`), `extract.py` (versioned prompt,
+  validation, repair), `validation.py` (§5.3 + discount + the three rules above), `pipeline.py`, `costs.py`,
+  `sheets.py` (CsvWriter; GoogleSheetsWriter via gspread — **not yet tested against a real sheet**)
 - `scripts/make_synthetic.py` (80 invoices, 6 templates, 4 currencies, 26 phone photos, 3 adversarial),
-  `scripts/run_folder.py`, `scripts/eval.py` (all §8 metrics; `--dry-run` passes 100%)
-- tests (validation, prepare, extract/pipeline, providers with a fake client, eval metrics), CI, Makefile,
-  requirements split, README skeleton, docs/DESIGN.md, data/README.md
+  `scripts/run_folder.py`, `scripts/eval.py` (all §8 metrics incl. document exact match; `--dry-run` 100%)
+- tests (schema, validation, prepare, extract/pipeline, providers with a fake client, eval metrics incl. a
+  failing-document run), CI, Makefile, requirements split, README with results, docs/DESIGN.md with
+  evaluation and findings, data/README.md
 - Public repo: https://github.com/DavutKursun/invoice-to-sheet
 
-First dev run (2026-10-11, first 20 dev docs, still in json_schema mode; `eval/results/dev-qwen_qwen3.8-27b.*`,
-re-scored from the saved predictions with the stricter line-item scoring and the control-char check):
-money fields 100%, line-item F1 0.91, auto-approved 55%, errors among auto-approved 18% (inv006 and
-inv007: quantity/unit price fused on the old receipt pages — fixed by the dataset change and the
-zero-quantity check), review-queue precision 100%, both adversarial documents resisted the injection,
-repair rate 5%, latency p50 20.5 s (free-tier queueing; the first calls of the day took 1.6 s),
-~2.1k input + ~0.4k output tokens per document (JSON mode adds ~400 input).
+Not done from the original M4 list: `scripts/run_batch.py` (Message Batches, 50% off) and the Sonnet vs
+Haiku comparison — Haiku 5.5 already hits 100% on the synthetic data at $0.0009/doc, so the comparison
+was deprioritised; mention both as next steps in the README if they are still wanted. Groq free tier was
+measured only on 20 dev docs in json_schema mode (money fields 100%, vendor names 65%); not re-run after
+the JSON-mode switch.
 
-Token usage 2026-10-11: ~66k on Groq (Davut's quota was shared with another project that night;
-the cap for the day was ~60k). Budget rule of thumb: ~2.9k tokens per document in JSON mode.
-
-**Tomorrow:**
-1. Full dev run: `python scripts/eval.py --split dev --delay 3` (60 docs ≈ 175k tokens — check the Groq
-   quota first). Confirm the diacritics fix across all vendors and the receipt pages after the regeneration.
-2. One test run: `python scripts/eval.py --split test --delay 3` (touch once; inv001 was touched by the
-   smoke test, nothing else).
-3. README results table (dev and test, money-field rate per kind, line-item F1, routing quality, cost,
-   latency) and the DESIGN.md "Evaluation" section.
-4. Then M5: Gradio UI + HF Space with secrets and budget guard (§9, §10).
+**Next (M5):** Gradio app per §9 (single-document tab with the rendered page, editable fields, line items,
+decision badge + reasons, cost, "Append to sheet", sample buttons; batch tab up to 10 files with progress,
+summary table, CSV download), HF Space with secrets and the budget guard (`MAX_DAILY_USD`), demo GIF,
+About box, CI green. Optional: Google Sheets writer checked against a throwaway sheet.
 
 ## 1. Goal
 
