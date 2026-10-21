@@ -126,7 +126,7 @@ def test_dotenv_is_not_read_on_a_space(tmp_path: Path, monkeypatch):
 
 
 def test_secrets_never_appear_in_the_settings_repr():
-    s = Settings(llm_api_key="gsk_secret_value", anthropic_api_key="sk-ant-secret-value", google_service_account_json_b64="eyJzZWNyZXQ=")
+    s = Settings(llm_api_key="groq-test-secret", anthropic_api_key="anthropic-test-secret", google_service_account_json_b64="eyJzZWNyZXQ=")
     text = repr(s)
-    assert "gsk_secret_value" not in text and "sk-ant-secret-value" not in text and "eyJzZWNyZXQ=" not in text
-    assert s.anthropic_api_key == "sk-ant-secret-value"  # the values are still there, just not printed
+    assert "groq-test-secret" not in text and "anthropic-test-secret" not in text and "eyJzZWNyZXQ=" not in text
+    assert s.anthropic_api_key == "anthropic-test-secret"  # the values are still there, just not printed

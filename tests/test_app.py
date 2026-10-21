@@ -9,7 +9,9 @@ from __future__ import annotations
 import csv
 import inspect
 import json
+import os
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -141,6 +143,29 @@ def test_bound_handlers_hide_cfg_from_gradio(tmp_path: Path):
         assert not any(isinstance(x, Settings) for x in inputs)
     with pytest.warns(UserWarning, match="Upload up to"):  # exactly what Gradio passes: inputs, then the Progress
         assert all(is_skip(x) for x in app._bind(app.run_batch, cfg)(None, "s", gr.Progress()))
+
+
+def test_cleanup_sessions_prunes_folders_older_than_an_hour(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    root = app.sessions_root()
+    stale = time.time() - 2 * 3600
+    old, fresh = root / "old", root / "fresh"
+    for folder in (old, fresh):
+        folder.mkdir(parents=True)
+        (folder / "invoices.csv").write_text("x", encoding="utf-8")
+    os.utime(old / "invoices.csv", (stale, stale))
+    os.utime(old, (stale, stale))
+    assert app.cleanup_sessions() == 1 and not old.exists() and fresh.exists()
+    assert app.cleanup_sessions() == 0  # nothing left to prune; a missing root is fine too
+    assert app.cleanup_sessions(root=tmp_path / "nowhere") == 0
+
+    old.mkdir()  # every request prunes: a page load is enough
+    (old / "review.csv").write_text("y", encoding="utf-8")
+    os.utime(old / "review.csv", (stale, stale))
+    os.utime(old, (stale, stale))
+    app.on_load(None, cfg=fake_cfg(tmp_path))
+    assert not old.exists() and fresh.exists()
+    assert app.build_ui(fake_cfg(tmp_path)).delete_cache == (3600, 3600)  # Gradio's upload cache, same schedule
 
 
 # --- table and text helpers -------------------------------------------------------------------------------------

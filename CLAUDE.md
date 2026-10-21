@@ -4,68 +4,64 @@ This file is the build spec. Read it fully before writing code. Work milestone b
 milestone; after each milestone stop, show how to run it, and wait for Davut's OK.
 Section 0 says where we are and what changed from the original plan.
 
-## 0. Status (updated 2026-10-19)
+## 0. Status (updated 2026-10-21) — project complete
 
-**Milestones 1–4 done (38 tests, no network). Next: M5 — Gradio UI + HF Space (§9, §10).**
+**All five milestones done. Live demo: https://huggingface.co/spaces/DavutKursun/invoice-to-sheet (public, cpu-basic,
+Claude Haiku 5.5). 78 tests, no network. Next work, if any, is in the "next steps" list below.**
 
-M4 result (Claude Haiku 5.5, `claude-haiku-5-5`, list price from reported usage): dev (60 docs) and test
-(20 docs) both 100% on every scored field, document exact match 100%, line-item F1 1.00, 0 errors among
-auto-approved; dev 59/60 auto-approved (one injected invoice the model flagged at confidence 0.70), test
-20/20; 3/3 injections ignored (dev only, the test split has none); $0.0008–0.0009 per document ($0.067 for
-both runs); latency p50 4.7–4.9 s, p95 under 6 s. **The test split was run exactly once, on 2026-10-19,
-after all tuning. Do not tune against it.** Tables: `eval/results/{dev,test}-claude-haiku-5-5.md`, README
-"Results", docs/DESIGN.md "Evaluation" and "Findings".
+Live check on the Space (2026-10-21, through the Gradio API, all auto_approved with the labelled totals):
+clean sample 7.9 s extraction / 11.9 s round trip, $0.0009; phone photo 6.2 s / 8.0 s, $0.0010; tricky sample
+(injected footer) 4.7 s / 6.3 s, $0.0008, injection ignored and named in notes; Append to CSV 1.5 s; batch of two
+uploads 12.6 s; counters after: 5 documents, $0.0045 of the $0.50 daily cap.
 
-Deviations from the original spec, in the order they happened:
+M4 result (Claude Haiku 5.5, list price): dev (60 docs) and test (20 docs) both 100% on every scored field,
+document exact match 100%, line-item F1 1.00, 0 errors among auto-approved; dev 59/60 auto-approved (one
+injected invoice the model flagged at confidence 0.70), test 20/20; 3/3 injections ignored (dev only);
+$0.0008–0.0009 per document; latency p50 4.7–4.9 s. **The test split was run exactly once, on 2026-10-19; do
+not tune against it.** Tables: `eval/results/{dev,test}-claude-haiku-5-5.md`, README, docs/DESIGN.md.
 
-- **No paid API by default.** The default provider is a free OpenAI-compatible vision model on Groq; Claude
-  is the measured, optional provider (`LLM_PROVIDER=anthropic`, native PDF input, `messages.parse`). Groq
-  does not accept PDFs, so `prepare.py` renders pages to JPEG with pypdfium2. Davut's Groq key lists only
-  one vision model, `qwen/qwen3.8-27b` (no Llama 4). .env currently points at Claude; the Groq path stays
-  the public-demo default (README).
-- **JSON mode + Pydantic is the default structured output on OpenAI-compatible providers** (schema appended
-  to the instruction, ~400 tokens; one repair retry). `USE_JSON_SCHEMA=1` opts into strict json_schema.
-  Reason: Groq's strict decoder turned Ü/ı/Ş into control characters in 7 of 20 vendor names; plain JSON
-  mode kept them. Groq's `json_validate_failed` is a bad generation (call redone in JSON mode), not
-  "unsupported"; error codes are logged.
-- **All 16 schema fields are required, no Python defaults** (§4). With defaults only 2 fields were in
-  `required` and Claude answered 400 "Schema is too complex"; `tests/test_schema.py` checks
-  `anthropic.transform_schema(InvoiceExtraction)` without network. The schema also gained `discount`.
-- **Validation gained three rules:** control characters in vendor_name / invoice_number / a line description
-  → review ("… contains unreadable characters"); a priced line with quantity or unit price 0 → review
-  ("line N: quantity or unit price missing"); a doubtful `discount` is ignored when it is 0, because prompt
-  rule 2 told the model to flag absent values and Haiku flagged `discount` on 37/60 dev docs with 0 real
-  errors. Prompt rule 4 now says an absent discount is normal (PROMPT_VERSION 2026-10-19.1). MIN_CONFIDENCE
-  0.85 and tolerances unchanged.
-- **Dataset regenerated 2026-10-11** (seed 7; `labels.jsonl` byte-identical). The narrow receipt layout let
-  descriptions overprint the Qty digit and EUR/TRY unit prices touch the quantity ("2" + "153,71 €" read as
-  2153.71). Descriptions wrap, columns are 19 mm apart, PDFs are invariant. Details in data/README.md.
-- **Eval:** line items match on amount, quantity and unit price (±0.01) plus description; a failing document
-  is recorded as a row with decision `error` and the run continues; "Document exact match" is reported.
+M5 (2026-10-21): `app.py` (Single document tab with the rendered page, editable fields, line items, decision
+badge with reasons, cost and latency line, Append to CSV with download; Batch tab with progress, summary and
+batch.csv; three dev-split samples inv010 / inv002 / inv030; status line; no-key banner; About box; `/health`
+on Gradio's own FastAPI app after `demo.launch()`), Space mode in `config.py` (`SPACE_ID` → .env never read;
+anthropic / claude-haiku-5-5, 20 pages, 10 MB, 10 files per batch, 100 documents and $0.50 per UTC day, budget
+file under the temp dir; the four variables are also set explicitly on the Space), `BudgetGuard` with a document
+cap, a lock and the "Daily demo budget reached …; resets at 00:00 UTC." message, `invoice_to_sheet/fake.py`
+(`DOCS_FAKE_EXTRACTOR=1`, fields from labels.jsonl, for headless tests), session cleanup after one hour (session
+folders on every request, Gradio's upload cache via `delete_cache`), `scripts/smoke_space.py`,
+`requirements-space.txt` (pydantic, pillow, pypdfium2, anthropic, gradio==6.30.0; verified in a fresh venv),
+`space/README.md`, `scripts/demo_gif.py` (Playwright in a throwaway venv, not in requirements),
+`docs/img/demo.gif`, README with the results and the live link. The Space was created and is updated with
+`HfApi` (`create_repo`, `add_space_variable`, `upload_folder`); its tree is app.py, invoice_to_sheet/, the three
+sample files, README.md (= space/README.md) and requirements.txt (= requirements-space.txt), nothing else.
 
-Implemented:
-- `invoice_to_sheet/config.py` (incl. `USE_JSON_SCHEMA`), `schema.py` (all required + strict JSON schema),
-  `prepare.py`, `providers.py` (OpenAICompatProvider: JSON mode default, json_schema opt-in, logged
-  fallbacks; AnthropicProvider: document/image blocks + `messages.parse`), `extract.py` (versioned prompt,
-  validation, repair), `validation.py` (§5.3 + discount + the three rules above), `pipeline.py`, `costs.py`,
-  `sheets.py` (CsvWriter; GoogleSheetsWriter via gspread — **not yet tested against a real sheet**)
-- `scripts/make_synthetic.py` (80 invoices, 6 templates, 4 currencies, 26 phone photos, 3 adversarial),
-  `scripts/run_folder.py`, `scripts/eval.py` (all §8 metrics incl. document exact match; `--dry-run` 100%)
-- tests (schema, validation, prepare, extract/pipeline, providers with a fake client, eval metrics incl. a
-  failing-document run), CI, Makefile, requirements split, README with results, docs/DESIGN.md with
-  evaluation and findings, data/README.md
-- Public repo: https://github.com/DavutKursun/invoice-to-sheet
+Deviations from the original spec, in the order they happened (details in docs/DESIGN.md "Findings"):
+- No paid API by default locally (free Groq path, JSON mode + Pydantic; `USE_JSON_SCHEMA=1` opt-in because
+  Groq's strict decoder mangled Ü/ı/Ş); Claude is the measured provider and the only one on the Space.
+- All 16 schema fields required (Claude answered 400 "Schema is too complex" with Python defaults); schema
+  gained `discount`; validation gained the control-character, zero-quantity and absent-discount rules;
+  prompt rule 4 says an absent discount is normal (PROMPT_VERSION 2026-10-19.1).
+- Dataset regenerated 2026-10-11 (receipt layout fixed, labels unchanged); stricter line-item scoring;
+  eval records failed documents as rows and reports document exact match.
+- `/health` lives on Gradio's own FastAPI app (docs-chat's current pattern) instead of a separate uvicorn mount.
 
-Not done from the original M4 list: `scripts/run_batch.py` (Message Batches, 50% off) and the Sonnet vs
-Haiku comparison — Haiku 5.5 already hits 100% on the synthetic data at $0.0009/doc, so the comparison
-was deprioritised; mention both as next steps in the README if they are still wanted. Groq free tier was
-measured only on 20 dev docs in json_schema mode (money fields 100%, vendor names 65%); not re-run after
-the JSON-mode switch.
+Not done from the original plan (deliberate; the README lists them as next steps):
+- `scripts/run_batch.py` (Message Batches, 50% off): at $0.0009 per document the saving is under five cents per
+  100 documents; not written.
+- Sonnet vs Haiku comparison: Haiku already scores 100% on the synthetic data; not measured.
+- Real invoices (10 hand-labelled): none available.
+- Google Sheets writer: implemented, local mode only, still not exercised against a real sheet.
+- Line items are shown, not editable (the fields table is).
+- The adversarial result is dev-only (the test split has no injected documents).
 
-**Next (M5):** Gradio app per §9 (single-document tab with the rendered page, editable fields, line items,
-decision badge + reasons, cost, "Append to sheet", sample buttons; batch tab up to 10 files with progress,
-summary table, CSV download), HF Space with secrets and the budget guard (`MAX_DAILY_USD`), demo GIF,
-About box, CI green. Optional: Google Sheets writer checked against a throwaway sheet.
+Manual items for Davut:
+- Rotate the Groq and Anthropic keys that were shown in a session transcript on 2026-10-21 (nothing in the repo;
+  `Settings` now hides key fields from its repr).
+- Five commits before the no-attribution rule carry an AI co-author trailer; removing them needs a history
+  rewrite and a force-push.
+- When `app.py` or the package changes, re-upload the Space tree with `HfApi.upload_folder` (see M5 above); the
+  Space restarts by itself. Daily caps are the variables `MAX_DAILY_DOCS` / `MAX_DAILY_USD`; the counters live
+  under /tmp and reset at 00:00 UTC or on a restart.
 
 ## 1. Goal
 

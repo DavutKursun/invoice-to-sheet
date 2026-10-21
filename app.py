@@ -33,8 +33,10 @@ import io
 import logging
 import math
 import re
+import shutil
 import tempfile
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -75,6 +77,7 @@ LINE_HEADERS = ["description", "quantity", "unit_price", "amount"]
 SUMMARY_HEADERS = ["file", "decision", "total", "cost"]
 FILE_TYPES = [".pdf", ".jpg", ".jpeg", ".png", ".webp"]
 NO_FILE_MESSAGE = "Upload a PDF or image first"
+SESSION_TTL_S = 3600  # session CSVs and Gradio's upload cache are pruned after an hour
 NO_KEY_MESSAGE = "Demo key not configured: set ANTHROPIC_API_KEY as a Space secret (or LLM_API_KEY and LLM_MODEL)."
 
 _providers: dict[tuple, tuple[Provider, str]] = {}
@@ -175,7 +178,7 @@ def about_text(cfg: Settings = settings) -> str:
         "numbers were measured on (every scored field correct on the held-out test split with Claude Haiku 5.5). "
         "Results on real documents will differ: they are messier and this demo has not been tuned on them.\n\n"
         "**What gets stored.** Nothing beyond your session: uploads are processed in memory and a temporary folder, "
-        "the session CSV lives in a temp folder and disappears when the Space restarts, and no document text is logged.\n\n"
+        "the session CSV lives in a temp folder, is deleted after an hour of inactivity and disappears when the Space restarts, and no document text is logged.\n\n"
         f"**Limits.** {cfg.max_file_mb} MB per file, {cfg.max_pages} pages per document, {cfg.max_files_per_batch} files per "
         f"batch, and for the whole demo {docs} and ${cfg.max_daily_usd:.2f} per UTC day (resets at 00:00 UTC).\n\n"
         f"**Model and cost.** `{model_id(cfg) or 'not configured'}` via {provider_name(cfg)}: one call with a strict schema "
@@ -300,8 +303,37 @@ def _safe_session(session_id) -> str:
     return sid if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sid) else uuid.uuid4().hex
 
 
+def sessions_root() -> Path:
+    return Path(tempfile.gettempdir()) / "invoice-to-sheet" / "sessions"
+
+
 def session_dir(session_id: str) -> Path:
-    return Path(tempfile.gettempdir()) / "invoice-to-sheet" / "sessions" / _safe_session(session_id)
+    return sessions_root() / _safe_session(session_id)
+
+
+def cleanup_sessions(max_age_s: float = SESSION_TTL_S, now: float | None = None, root: Path | None = None) -> int:
+    """Delete session folders whose newest file is older than ``max_age_s``; called on every request. Returns the count.
+
+    Uploads live in Gradio's own cache, which ``gr.Blocks(delete_cache=...)`` prunes on the same schedule.
+    """
+    root = root or sessions_root()
+    now = time.time() if now is None else now
+    removed = 0
+    if not root.is_dir():
+        return 0
+    for folder in root.iterdir():
+        try:
+            if not folder.is_dir():
+                continue
+            newest = max((f.stat().st_mtime for f in folder.rglob("*") if f.is_file()), default=folder.stat().st_mtime)
+            if now - newest > max_age_s:
+                shutil.rmtree(folder, ignore_errors=True)
+                removed += 1
+        except OSError:
+            continue
+    if removed:
+        log.info("pruned %d session folder(s) older than %d s", removed, max_age_s)
+    return removed
 
 
 def session_writer(session_id: str) -> CsvWriter:
@@ -345,11 +377,13 @@ def _skip(n: int) -> tuple:
 
 
 def on_load(session_id, cfg: Settings = settings):
+    cleanup_sessions()
     return session_id or uuid.uuid4().hex, status_text(cfg)
 
 
 def extract_single(file, session_id, progress=gr.Progress(), cfg: Settings = settings):
     """Prepare → extract → validate one upload; outputs preview, tables, decision, cost, download, state, status."""
+    cleanup_sessions()
     if not file:
         gr.Warning(NO_FILE_MESSAGE)
         return _skip(8)
@@ -386,6 +420,7 @@ def run_sample(kind: str, session_id, progress=gr.Progress(), cfg: Settings = se
 
 def append_to_csv(fields_rows, line_rows, doc_state, session_id, cfg: Settings = settings):
     """Re-validate the edited tables (duplicate check within the session) and append the row to the session CSV."""
+    cleanup_sessions()
     if not doc_state:
         gr.Warning("Nothing extracted yet: extract a document first.")
         return _skip(3)
@@ -425,6 +460,7 @@ def append_to_csv(fields_rows, line_rows, doc_state, session_id, cfg: Settings =
 
 def run_batch(files, session_id, progress=gr.Progress(), cfg: Settings = settings):
     """Process up to ``max_files_per_batch`` uploads; the daily cap stops the loop, a bad file does not."""
+    cleanup_sessions()
     paths = [str(f) for f in (files or [])]
     if not paths:
         gr.Warning(f"Upload up to {cfg.max_files_per_batch} PDF or image files first")
@@ -503,7 +539,7 @@ def _sample(kind: str, cfg: Settings):
 
 
 def build_ui(cfg: Settings = settings) -> gr.Blocks:
-    with gr.Blocks(title=TITLE) as demo:
+    with gr.Blocks(title=TITLE, delete_cache=(SESSION_TTL_S, SESSION_TTL_S)) as demo:  # uploads: pruned hourly after an hour
         session_state = gr.State(None)
         doc_state = gr.State(None)
 
