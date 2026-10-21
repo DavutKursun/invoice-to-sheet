@@ -10,3 +10,4 @@ __pycache__/
 .DS_Store
 scratchpad/
 eval/results/*dry-run*
+smoke_app.log

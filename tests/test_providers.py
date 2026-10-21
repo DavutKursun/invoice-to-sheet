@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from types import SimpleNamespace
@@ -8,7 +9,8 @@ import pytest
 
 from invoice_to_sheet.extract import extract
 from invoice_to_sheet.prepare import prepare
-from invoice_to_sheet.providers import OpenAICompatProvider, ProviderError
+from invoice_to_sheet.providers import AnthropicProvider, OpenAICompatProvider, ProviderError
+from invoice_to_sheet.schema import InvoiceExtraction
 
 
 class FakeHTTPError(Exception):
@@ -125,3 +127,73 @@ def test_extract_end_to_end_in_json_mode(sample_png):
     client = FakeClient(lambda kw: _response(GOOD))
     ex = extract(prepare(sample_png), OpenAICompatProvider("k", "http://x", client=client), "m")
     assert not ex.repaired and ex.data.vendor_name == "Kestrel Software OÜ" and ex.result.schema_enforced is False
+
+
+# --- AnthropicProvider (fake client, no SDK) ---------------------------------------------------------------
+
+
+class FakeAnthropicClient:
+    """Records every messages.parse call and answers with a parsed InvoiceExtraction, like the SDK does."""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+        def parse(**kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(parsed_output=InvoiceExtraction.model_validate_json(GOOD), content=[],
+                                   usage=SimpleNamespace(input_tokens=2500, output_tokens=310))
+
+        self.messages = SimpleNamespace(parse=parse)
+
+
+def _blocks(client: FakeAnthropicClient, i: int = 0) -> list[dict]:
+    return client.calls[i]["messages"][0]["content"]
+
+
+def test_anthropic_sends_the_whole_pdf_as_a_document_block_when_it_fits(sample_pdf):
+    client = FakeAnthropicClient()
+    doc = prepare(sample_pdf, max_pages=4)  # 3 pages, nothing cut
+    assert not doc.truncated
+    res = AnthropicProvider("k", client=client).extract(doc, "sys", "Extract.", "claude-haiku-5-5")
+    call = client.calls[0]
+    assert (call["model"], call["max_tokens"], call["system"]) == ("claude-haiku-5-5", 2000, "sys")
+    assert call["output_format"] is InvoiceExtraction
+    assert [b["type"] for b in _blocks(client)] == ["document", "text"]  # the document comes before the instruction
+    assert _blocks(client)[0]["source"] == {"type": "base64", "media_type": "application/pdf",
+                                            "data": base64.standard_b64encode(sample_pdf.read_bytes()).decode()}
+    assert _blocks(client)[1] == {"type": "text", "text": "Extract."}
+    assert res.raw_json == InvoiceExtraction.model_validate_json(GOOD).model_dump_json()
+    assert (res.input_tokens, res.output_tokens, res.model) == (2500, 310, "claude-haiku-5-5")
+    assert res.usage_estimated is False and res.schema_enforced is True
+
+
+def test_anthropic_sends_page_images_when_the_pdf_was_truncated(sample_pdf):
+    client = FakeAnthropicClient()
+    doc = prepare(sample_pdf, max_pages=1)  # 3 pages, only the first rendered
+    assert doc.truncated and doc.pdf_bytes is not None and len(doc.images) == 1
+    AnthropicProvider("k", client=client).extract(doc, "sys", "Extract.", "m")
+    assert [b["type"] for b in _blocks(client)] == ["image", "text"]  # no document block: Claude sees only the pages the limit allows
+    assert _blocks(client)[0]["source"] == {"type": "base64", "media_type": "image/jpeg", "data": doc.images_b64()[0]}
+    assert _blocks(client)[1] == {"type": "text", "text": "Extract."}
+    AnthropicProvider("k", client=client).extract(prepare(sample_pdf, max_pages=2), "sys", "Extract.", "m")
+    assert [b["type"] for b in _blocks(client, 1)] == ["image", "image", "text"]
+
+
+def test_anthropic_sends_an_image_upload_as_an_image_block(sample_png):
+    client = FakeAnthropicClient()
+    doc = prepare(sample_png)
+    AnthropicProvider("k", client=client).extract(doc, "sys", "Extract.", "m")
+    assert [b["type"] for b in _blocks(client)] == ["image", "text"] and _blocks(client)[0]["source"]["data"] == doc.images_b64()[0]
+
+
+def test_anthropic_errors_become_provider_error(sample_png):
+    class FakeAPIStatusError(Exception):
+        status_code = 529
+        body = {"error": {"type": "overloaded_error", "message": "Overloaded"}}
+
+    def parse(**kwargs):
+        raise FakeAPIStatusError("Overloaded")
+
+    client = SimpleNamespace(messages=SimpleNamespace(parse=parse))
+    with pytest.raises(ProviderError, match=r"HTTP 529 \(overloaded_error\): Overloaded"):
+        AnthropicProvider("k", client=client).extract(prepare(sample_png), "sys", "Extract.", "m")

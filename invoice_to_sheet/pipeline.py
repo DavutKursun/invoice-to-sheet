@@ -32,6 +32,7 @@ class ProcessedDoc:
     pages: int
     warnings: list[str] = field(default_factory=list)
     processed_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    preview_jpeg: bytes | None = None  # first rendered page (JPEG bytes), only with process_document(..., keep_preview=True)
 
     def row(self) -> dict:
         d = self.data
@@ -68,11 +69,12 @@ def process_document(
     writer: Writer | None = None,
     cfg: Settings = default_settings,
     guard: BudgetGuard | None = None,
+    keep_preview: bool = False,
 ) -> ProcessedDoc:
     t0 = time.perf_counter()
     doc: PreparedDoc = prepare(path, cfg.max_pages, cfg.render_dpi, cfg.max_image_side, cfg.max_file_mb)
-    if guard is not None and not guard.can_spend(0.01):
-        raise RuntimeError("Demo budget reached for today; not calling the API.")
+    if guard is not None:
+        guard.check(0.01)  # BudgetExceeded (a RuntimeError) with a message safe to show; nothing is called
     ex: Extraction = extract(doc, provider, model)
     usd = cost_usd(model, ex.result.input_tokens, ex.result.output_tokens)
     if guard is not None:
@@ -88,6 +90,7 @@ def process_document(
     out = ProcessedDoc(
         doc.file_name, decision, reasons, ex.data, model, usd, format_cost(model, usd),
         time.perf_counter() - t0, ex.repaired, doc.page_count, list(doc.warnings),
+        preview_jpeg=doc.images[0] if keep_preview and doc.images else None,
     )
     if writer is not None:
         writer.append(out.row(), review=(decision == "needs_review"))

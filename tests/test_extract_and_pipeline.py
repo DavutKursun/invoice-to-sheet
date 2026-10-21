@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
 import pytest
 
 from invoice_to_sheet.config import Settings
-from invoice_to_sheet.costs import BudgetGuard, cost_usd, format_cost
+from invoice_to_sheet.costs import BudgetExceeded, BudgetGuard, cost_usd, format_cost
 from invoice_to_sheet.extract import extract
 from invoice_to_sheet.pipeline import process_document
+from invoice_to_sheet.prepare import prepare
 from invoice_to_sheet.providers import ExtractResult, ProviderError, parse_json_loose
-from invoice_to_sheet.sheets import CsvWriter
+from invoice_to_sheet.sheets import COLUMNS, CsvWriter
 
 
 class FakeProvider:
@@ -42,16 +44,12 @@ def test_parse_json_loose_handles_fences_and_prose():
 
 
 def test_extract_validates_first_try(sample_pdf):
-    from invoice_to_sheet.prepare import prepare
-
     p = FakeProvider([good_json()])
     ex = extract(prepare(sample_pdf), p, "m")
     assert ex.data.total == 119.0 and not ex.repaired and len(p.calls) == 1
 
 
 def test_extract_repairs_once(sample_pdf):
-    from invoice_to_sheet.prepare import prepare
-
     p = FakeProvider(['{"vendor_name": "x", "total": "abc"', good_json()])
     ex = extract(prepare(sample_pdf), p, "m")
     assert ex.repaired and len(p.calls) == 2 and "did not validate" in p.calls[1]
@@ -59,8 +57,6 @@ def test_extract_repairs_once(sample_pdf):
 
 
 def test_extract_gives_up_after_repair(sample_pdf):
-    from invoice_to_sheet.prepare import prepare
-
     p = FakeProvider(["nope", "still nope"])
     with pytest.raises(ValueError):
         extract(prepare(sample_pdf), p, "m")
@@ -86,12 +82,40 @@ def test_pipeline_truncation_reason(sample_pdf, tmp_path: Path):
     assert out.decision == "needs_review" and any("first 1 of 3 pages" in r for r in out.reasons)
 
 
-def test_budget_guard_blocks(sample_pdf, tmp_path: Path):
+def test_budget_guard_blocks_with_a_friendly_message(sample_pdf, tmp_path: Path):
     cfg = Settings(output_dir=tmp_path)
-    guard = BudgetGuard(tmp_path / "b.json", max_daily_usd=0.005)
-    guard.record(0.004)
-    with pytest.raises(RuntimeError):
-        process_document(sample_pdf, FakeProvider([good_json()]), "m", None, cfg, guard)
+    guard = BudgetGuard(tmp_path / "b.json", max_daily_usd=0.01)
+    guard.record(0.009)
+    provider = FakeProvider([good_json()])
+    with pytest.raises(BudgetExceeded) as info:  # a RuntimeError subclass, so callers that catch RuntimeError keep working
+        process_document(sample_pdf, provider, "m", None, cfg, guard)
+    assert str(info.value) == "Daily demo budget reached ($0.01 of $0.01 spent today); resets at 00:00 UTC."
+    assert isinstance(info.value, RuntimeError) and provider.calls == [] and guard.read().calls == 1  # nothing called, nothing recorded
+
+
+def test_document_cap_stops_the_pipeline(sample_pdf, tmp_path: Path):
+    cfg = Settings(output_dir=tmp_path)
+    guard = BudgetGuard(tmp_path / "b.json", max_daily_usd=5.0, max_daily_docs=2)
+    provider = FakeProvider([good_json(), good_json(), good_json()])
+    for _ in range(2):
+        process_document(sample_pdf, provider, "m", None, cfg, guard)
+    with pytest.raises(BudgetExceeded, match=r"^Daily demo budget reached \(2 of 2 documents today\); resets at 00:00 UTC\.$"):
+        process_document(sample_pdf, provider, "m", None, cfg, guard)
+    assert len(provider.calls) == 2 and guard.remaining_docs() == 0
+
+
+def test_pipeline_keeps_the_first_page_preview_only_when_asked(sample_pdf, tmp_path: Path):
+    from PIL import Image
+
+    cfg = Settings(output_dir=tmp_path, max_pages=4)
+    plain = process_document(sample_pdf, FakeProvider([good_json()]), "m", None, cfg)
+    assert plain.preview_jpeg is None
+    out = process_document(sample_pdf, FakeProvider([good_json()]), "m", None, cfg, keep_preview=True)
+    assert out.preview_jpeg is not None and out.preview_jpeg[:2] == b"\xff\xd8"  # JPEG magic
+    with Image.open(io.BytesIO(out.preview_jpeg)) as img:
+        assert img.format == "JPEG" and max(img.size) <= cfg.max_image_side and img.size[1] > img.size[0]  # A4 portrait
+    assert out.preview_jpeg == prepare(sample_pdf, cfg.max_pages, cfg.render_dpi, cfg.max_image_side).images[0]  # the first page
+    assert list(out.row()) == COLUMNS and "preview_jpeg" not in out.row()  # 22 columns; the preview never goes into the sheet
 
 
 def test_costs():

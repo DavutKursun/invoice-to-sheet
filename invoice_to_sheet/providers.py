@@ -8,7 +8,8 @@
   that request format. JSON mode is the default because Groq's schema-constrained decoder was seen
   turning Ü/ı/Ş into control characters (2026-10-11, 7 of 20 vendor names) while JSON mode kept them.
 * ``AnthropicProvider`` – Claude with native PDF input (document block) or images, and
-  ``client.messages.parse`` structured outputs.
+  ``client.messages.parse`` structured outputs. A PDF longer than ``max_pages`` is sent as the
+  rendered page images, so the page limit holds for Claude too.
 
 Both return ``ExtractResult(raw_json, input_tokens, output_tokens, model, elapsed,
 usage_estimated, schema_enforced)``. Network errors become ``ProviderError``.
@@ -162,8 +163,13 @@ class AnthropicProvider:
         self._client = client
 
     def _content(self, doc: PreparedDoc, instruction: str) -> list[dict]:
+        """The document before the instruction: the whole PDF as one document block, or page images.
+
+        A PDF with more pages than ``max_pages`` (``doc.truncated``) goes as the rendered page images instead,
+        so the page limit holds for Claude too and the "only the first N of M pages were read" reason is true.
+        """
         content: list[dict] = []
-        if doc.kind == "pdf" and doc.pdf_bytes is not None:
+        if doc.kind == "pdf" and doc.pdf_bytes is not None and not doc.truncated:
             import base64
 
             content.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": base64.standard_b64encode(doc.pdf_bytes).decode()}})

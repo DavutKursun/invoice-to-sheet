@@ -1,0 +1,9 @@
+# Runtime for the Hugging Face Space (Gradio SDK, free CPU hardware).
+# The Space installs `requirements.txt` from the repo root, so copy this file there as
+# requirements.txt when pushing to the Space. CPU only; nothing beyond what the app needs:
+# no Google Sheets client, no Groq/OpenAI client, no dataset generator, no test tools.
+pydantic>=2.6
+pillow>=10.0
+pypdfium2>=4.30
+anthropic>=0.50
+gradio==6.30.0
